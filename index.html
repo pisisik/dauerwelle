@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dauerwelle</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0d0e; }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    position: fixed;
+    top: 0; left: 0;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<script>
+// ── Engine ──────────────────────────────────────────────────────────────────
+const VERT = 'attribute vec2 p; void main(){ gl_Position = vec4(p,0.0,1.0); }';
+
+function compileShader(gl, type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+    console.error('Shader error:\n' + gl.getShaderInfoLog(s));
+  return s;
+}
+
+// ── Dauerwelle fragment shader ───────────────────────────────────────────────
+const FRAG = `precision highp float;
+uniform float u_time; uniform vec2 u_res; uniform vec2 u_mouse;
+uniform vec2 u_morph; uniform float u_pulse; uniform float u_rest; uniform float u_active;
+uniform float u_neutral; uniform float u_glitch; uniform float u_ship;
+
+float hash11(float p){ p=fract(p*0.1031); p*=p+33.33; p*=p+p; return fract(p); }
+float hash21(vec2 p){ vec3 p3=fract(vec3(p.xyx)*0.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }
+vec2 hash22(vec2 p){ vec3 p3=fract(vec3(p.xyx)*vec3(0.1031,0.1030,0.0973)); p3+=dot(p3,p3.yzx+33.33); return fract((p3.xx+p3.yz)*p3.zy); }
+float vnoise(vec2 p){ vec2 i=floor(p),f=fract(p); vec2 u=f*f*(3.0-2.0*f);
+  return mix(mix(hash21(i),hash21(i+vec2(1,0)),u.x),mix(hash21(i+vec2(0,1)),hash21(i+vec2(1,1)),u.x),u.y); }
+
+vec3 grade(vec3 c){
+  float l = dot(c, vec3(0.299, 0.587, 0.114));
+  vec3 fog = vec3(l);
+  fog = mix(fog, fog * vec3(0.92, 0.97, 0.95) + vec3(0.05, 0.06, 0.06), 0.7);
+  c = mix(c, fog, clamp(u_neutral, 0.0, 1.0));
+  c = mix(c, mix(vec3(0.52, 0.55, 0.54), c, 0.82), u_neutral * 0.35);
+  float g = clamp(u_glitch - 1.0, 0.0, 2.0);
+  float scan = 0.5 + 0.5 * sin(gl_FragCoord.y * 3.14159);
+  c *= 1.0 - 0.09 * g * scan;
+  float blk = step(0.88, hash21(floor(gl_FragCoord.xy / 7.0) + floor(u_time * 7.0)));
+  c = mix(c, c.gbr, blk * 0.20 * g);
+  return c;
+}
+
+vec3 baseCol(vec2 q){
+  vec3 red=vec3(0.95,0.16,0.12), blue=vec3(0.10,0.16,0.85), yellow=vec3(1.0,0.82,0.0),
+       ink=vec3(0.05,0.05,0.07), paper=vec3(0.95,0.93,0.86);
+  float band=floor(q.x*5.0);
+  float seg=floor(q.y*3.0 + sin(q.x*2.0+u_time*0.2)*0.4);
+  float h=hash21(vec2(band,seg));
+  return h<0.22?red : h<0.44?blue : h<0.66?yellow : h<0.84?ink : paper;
+}
+
+vec4 dauerwelle(vec2 p){
+  vec3 white=vec3(0.93,0.94,0.92), navy=vec3(0.18,0.223,0.345),
+       win=vec3(0.20,0.24,0.30), grey=vec3(0.74,0.77,0.77), dark=vec3(0.10,0.12,0.16);
+  vec3 col=white; float cov=0.0;
+  float rb=smoothstep(0.34,0.54,p.x);
+  float rs=smoothstep(-0.40,-0.52,p.x);
+  float deckY=-0.020+0.050*rb+0.022*rs;
+  float bowLift=smoothstep(0.42,0.56,p.x)*0.060;
+  float sternLift=smoothstep(-0.42,-0.52,p.x)*0.040;
+  float hullBot=-0.120+bowLift+sternLift;
+  float botEff=mix(hullBot, deckY, smoothstep(0.49,0.585,p.x));
+  if(p.x>-0.520 && p.x<0.585 && p.y>botEff && p.y<deckY){ col=white; cov=1.0;
+    if(p.y<botEff+0.012) col=dark;
+  }
+  float sxL=-0.460, sxR=0.420;
+  if(p.x>sxL && p.x<sxR && p.y>=-0.020 && p.y<0.086){ col=white; cov=1.0;
+    if(p.y< -0.004) col=navy;
+    else if(p.y>0.004 && p.y<0.056){
+      float wx=fract((p.x-sxL)*28.0);
+      col = (wx>0.20 && wx<0.90) ? win : white;
+    }
+  }
+  if(p.x>-0.420 && p.x<0.360 && p.y>=0.086 && p.y<0.106){ col=mix(white,grey,0.45); cov=1.0;
+    if(fract(p.x*44.0)<0.16) col=grey;
+  }
+  if(p.x>0.020 && p.x<0.190 && p.y>=0.086 && p.y<0.158){ col=white; cov=1.0;
+    if(p.y>0.120 && p.y<0.150) col=win;
+  }
+  if(abs(p.x-0.104)<0.006 && p.y>=0.158 && p.y<0.320){ col=grey; cov=1.0; }
+  if(p.x>0.104 && p.x<0.158 && p.y>0.270 && p.y<0.306){ col=navy; cov=1.0; }
+  return vec4(col,cov);
+}
+
+vec3 dauerScene(vec2 sc){
+  float waterY=-0.100;
+  vec3 sky=mix(vec3(0.855,0.875,0.870), vec3(0.795,0.825,0.845), smoothstep(-0.10,0.50,sc.y));
+  sky += 0.022*(vnoise(sc*vec2(3.0,6.0)+u_time*0.02)-0.5);
+  vec3 scene=sky;
+  float bank=smoothstep(waterY,waterY+0.004,sc.y)*(1.0-smoothstep(waterY+0.052,waterY+0.090,sc.y));
+  vec3 bankCol=mix(vec3(0.40,0.40,0.28), vec3(0.56,0.42,0.27), 0.5+0.5*sin(sc.x*9.0+1.0));
+  scene=mix(scene,bankCol,bank*0.85);
+  if(sc.y<waterY){
+    vec3 water=mix(vec3(0.40,0.47,0.48), vec3(0.29,0.36,0.39), smoothstep(waterY,-0.50,sc.y));
+    water += 0.030*sin(sc.x*38.0 - u_time*1.4)*smoothstep(-0.50,waterY,sc.y);
+    water = mix(water, vec3(0.46,0.37,0.25), 0.10*(0.5+0.5*sin(sc.x*6.0)));
+    vec2 rc=vec2(sc.x+0.012*sin(sc.y*55.0+u_time*1.8), waterY*2.0-sc.y);
+    vec4 rfl=dauerwelle(rc);
+    water=mix(water, rfl.rgb, rfl.a*0.26);
+    scene=water;
+  }
+  vec4 b=dauerwelle(sc);
+  scene=mix(scene,b.rgb,b.a);
+  return scene;
+}
+
+void main(){
+  vec2 uv=gl_FragCoord.xy/u_res;
+  float asp=u_res.x/u_res.y;
+  float t=u_time*(0.4+u_rest);
+  float gAmt=0.55+u_glitch;
+  float glitch=(0.15 + abs(u_morph.x)*0.45 + u_pulse*1.6)*gAmt;
+  float rows=14.0 + floor(abs(u_morph.y)*10.0) + floor(gAmt*8.0);
+  float row=floor(uv.y*rows);
+  float rnd=hash11(row+floor(t*4.0));
+  float slice=step(0.55,rnd)*(rnd-0.5)*glitch*(0.4+u_mouse.x);
+  float sp=(0.012+0.045*glitch)*(0.4+u_mouse.x);
+
+  vec2 suv=uv; suv.x+=slice;
+  vec3 a=baseCol(suv);
+  vec3 ag=baseCol(suv+vec2(sp,0.0));
+  a=clamp(a+(ag-a)*0.5*step(0.5,rnd),0.0,1.0);
+  a*=0.84+0.16*sin(gl_FragCoord.y*1.1);
+  float inv=step(0.92,hash11(row+floor(t*6.0)+13.0));
+  a=mix(a,1.0-a,inv*step(0.5,glitch));
+
+  vec2 sc=uv-0.5; sc.x*=asp;
+  float fit=max(1.0,1.55/asp); sc*=fit; sc.y+=0.05*(fit-1.0);
+  sc.x -= 0.16*sin(u_time*0.08);
+  sc.y -= 0.012*sin(u_time*0.6);
+  sc.x += slice;
+  vec3 s=dauerScene(sc);
+  vec3 sg=dauerScene(sc+vec2(sp,0.0));
+  s=mix(s, vec3(sg.r,s.g,s.b), 0.5*step(0.5,rnd));
+
+  vec2 blk=floor(uv*vec2(40.0,24.0));
+  float shard=step(0.93-0.06*gAmt,hash21(blk+floor(t*5.0)));
+  float shAmt=clamp(gAmt-0.6,0.0,1.0);
+  a=mix(a,a.bgr,shard*shAmt);
+  s=mix(s,s.bgr,shard*shAmt*0.7);
+
+  vec3 finalC=mix(a,s,clamp(u_ship,0.0,1.0));
+  finalC=mix(finalC,vec3(0.95),u_pulse*step(0.7,hash11(row+floor(t*10.0))));
+  gl_FragColor=vec4(grade(finalC),1.0);
+}`;
+
+// ── Setup ────────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl', { antialias: true, premultipliedAlpha: false });
+
+const prog = gl.createProgram();
+gl.attachShader(prog, compileShader(gl, gl.VERTEX_SHADER, VERT));
+gl.attachShader(prog, compileShader(gl, gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(prog);
+gl.useProgram(prog);
+
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+const loc = gl.getAttribLocation(prog, 'p');
+gl.enableVertexAttribArray(loc);
+gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+const u = {};
+['u_time','u_res','u_mouse','u_morph','u_pulse','u_rest','u_active',
+ 'u_neutral','u_glitch','u_ship'].forEach(n => { u[n] = gl.getUniformLocation(prog, n); });
+
+// config: foggy palette, ferry visible, subtle glitch
+const cfg = { neutral: 0.7, glitch: 1.0, rest: 0.35, ship: 1.0 };
+
+// interaction state
+let mouse    = [0.5, 0.5],  mouseT  = [0.5, 0.5];
+let morph    = [0, 0],      morphT  = [0, 0];
+let pulse    = 0,           active  = 0, activeT = 0;
+let dragging = false, sx = 0, sy = 0, bx = 0, by = 0;
+const dpr    = Math.min(window.devicePixelRatio || 1, 2);
+
+function norm(e) {
+  const r = canvas.getBoundingClientRect();
+  return [
+    Math.max(0, Math.min(1, (e.clientX - r.left)  / r.width)),
+    Math.max(0, Math.min(1, 1 - (e.clientY - r.top) / r.height))
+  ];
+}
+
+canvas.addEventListener('pointermove', e => {
+  [mouseT[0], mouseT[1]] = norm(e);
+  activeT = 1;
+  if (dragging) {
+    const r = canvas.getBoundingClientRect();
+    morphT[0] = bx + ((e.clientX - sx) / r.width)  * 2.2;
+    morphT[1] = by - ((e.clientY - sy) / r.height) * 2.2;
+  }
+});
+canvas.addEventListener('pointerdown', e => {
+  dragging = true; sx = e.clientX; sy = e.clientY;
+  bx = morphT[0]; by = morphT[1];
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointerup',     e => { dragging = false; pulse = 1; });
+canvas.addEventListener('pointercancel', e => { dragging = false; });
+canvas.addEventListener('pointerleave',  e => { activeT = 0; });
+
+function resize() {
+  const w = Math.round(canvas.clientWidth  * dpr);
+  const h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+}
+
+const start = performance.now();
+function loop(now) {
+  resize();
+  const t = (now - start) / 1000;
+
+  mouse[0]  += (mouseT[0]  - mouse[0])  * 0.12;
+  mouse[1]  += (mouseT[1]  - mouse[1])  * 0.12;
+  morph[0]  += (morphT[0]  - morph[0])  * 0.15;
+  morph[1]  += (morphT[1]  - morph[1])  * 0.15;
+  active    += (activeT    - active)     * 0.08;
+  pulse     *= 0.945;
+
+  gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+  gl.useProgram(prog);
+  gl.uniform1f(u.u_time,    t);
+  gl.uniform2f(u.u_res,     gl.drawingBufferWidth, gl.drawingBufferHeight);
+  gl.uniform2f(u.u_mouse,   mouse[0], mouse[1]);
+  gl.uniform2f(u.u_morph,   morph[0], morph[1]);
+  gl.uniform1f(u.u_pulse,   pulse);
+  gl.uniform1f(u.u_rest,    cfg.rest);
+  gl.uniform1f(u.u_active,  active);
+  gl.uniform1f(u.u_neutral, cfg.neutral);
+  gl.uniform1f(u.u_glitch,  cfg.glitch);
+  gl.uniform1f(u.u_ship,    cfg.ship);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
