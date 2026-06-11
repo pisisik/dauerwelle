@@ -92,11 +92,6 @@ vec4 dauerwelle(vec2 p){
   if(p.x>-0.420 && p.x<0.360 && p.y>=0.086 && p.y<0.106){ col=mix(white,grey,0.45); cov=1.0;
     if(fract(p.x*44.0)<0.16) col=grey;
   }
-  if(p.x>0.020 && p.x<0.190 && p.y>=0.086 && p.y<0.158){ col=white; cov=1.0;
-    if(p.y>0.120 && p.y<0.150) col=win;
-  }
-  if(abs(p.x-0.104)<0.006 && p.y>=0.158 && p.y<0.320){ col=grey; cov=1.0; }
-  if(p.x>0.104 && p.x<0.158 && p.y>0.270 && p.y<0.306){ col=navy; cov=1.0; }
   return vec4(col,cov);
 }
 
